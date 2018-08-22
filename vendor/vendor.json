@@ -1,0 +1,25 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "20Pind5XCrfZL/F0oibWfd9gotA=",
+			"path": "github.com/boltdb/bolt",
+			"revision": "fd01fc79c553a8e99d512a07e8e0c63d4a3ccfc5",
+			"revisionTime": "2018-03-02T18:00:52Z"
+		},
+		{
+			"checksumSHA1": "uFNLkTxk8BkHTk0Jcub2lj2BX4M=",
+			"path": "github.com/google/uuid",
+			"revision": "dec09d789f3dba190787f8b4454c7d3c936fed9e",
+			"revisionTime": "2017-11-29T19:10:14Z"
+		},
+		{
+			"checksumSHA1": "/oZpHfYc+ZgOwYAhlvcMhmETYpw=",
+			"path": "golang.org/x/sys/unix",
+			"revision": "99f16d856c9836c42d24e7ab64ea72916925fa97",
+			"revisionTime": "2017-03-08T15:04:45Z"
+		}
+	],
+	"rootPath": "github.com/farseeker/go-flamenco"
+}

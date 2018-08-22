@@ -1,0 +1,8 @@
+debug
+
+*.db
+*.db.lock
+
+log.txt
+
+.vscode

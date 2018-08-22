@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/gorilla/mux"
 )
 
 var db *bolt.DB
@@ -22,18 +24,37 @@ func main() {
 	}
 	defer db.Close()
 
-	http.HandleFunc("/api/flamenco/managers/link/exchange", linkExchange)
-	http.HandleFunc("/flamenco/managers/link/choose", linkChoose)
-	http.HandleFunc("/api/flamenco/managers/link/reset-token", linkReset)
+	r := mux.NewRouter()
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		body, _ := ioutil.ReadAll(r.Body)
-		output := fmt.Sprintf("------\n%s\n%s\n", r.RequestURI, string(body))
-		ioutil.WriteFile("log.txt", []byte(output), 0744)
-		fmt.Fprintf(w, r.RequestURI)
-		fmt.Fprintf(w, string(body))
-		//fmt.Fprintf(w, "Welcome to my website!")
-	})
+	r.HandleFunc("/flamenco/managers/link/choose", linkChoose)
+	r.HandleFunc("/api/flamenco/managers/link/exchange", linkExchange)
+	r.HandleFunc("/api/flamenco/managers/link/reset-token", linkReset)
+	r.HandleFunc("/api/flamenco/managers/{identity}/task-update-batch", taskUpdateBatch)
+	r.HandleFunc("/api/flamenco/managers/{identity}/startup", startup)
 
-	http.ListenAndServe(":8123", nil)
+	r.PathPrefix("/").HandlerFunc(logDefault)
+	srv := &http.Server{
+		Handler: r,
+		Addr:    ":8123",
+		// Good practice: enforce timeouts for servers you create!
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
+
+	log.Fatal(srv.ListenAndServe())
+}
+
+func logDefault(w http.ResponseWriter, r *http.Request) {
+	body, _ := ioutil.ReadAll(r.Body)
+	output := fmt.Sprintf("------\n%s\n%s\n", r.RequestURI, string(body))
+	ioutil.WriteFile("log.txt", []byte(output), 0744)
+	fmt.Println(r.RequestURI)
+	fmt.Fprintf(w, r.RequestURI)
+	fmt.Fprintf(w, string(body))
+}
+
+func httpError(w http.ResponseWriter, err error) {
+	w.WriteHeader(http.StatusInternalServerError)
+	fmt.Fprintf(w, err.Error())
+	fmt.Println(err)
 }

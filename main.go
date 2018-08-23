@@ -5,9 +5,11 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
@@ -31,6 +33,9 @@ func main() {
 	r.HandleFunc("/api/flamenco/managers/link/reset-token", linkReset)
 	r.HandleFunc("/api/flamenco/managers/{identity}/task-update-batch", taskUpdateBatch)
 	r.HandleFunc("/api/flamenco/managers/{identity}/startup", startup)
+	r.HandleFunc("/api/flamenco/managers/{identity}/depsgraph", depsgraph)
+	r.HandleFunc("/api/flamenco/tasks/{taskid}", taskByID)
+	//
 
 	r.PathPrefix("/").HandlerFunc(logDefault)
 	srv := &http.Server{
@@ -57,4 +62,12 @@ func httpError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
 	fmt.Fprintf(w, err.Error())
 	fmt.Println(err)
+}
+
+func newUUIDForBson() string {
+	UUID := uuid.New()
+	UUIDString := UUID.String()
+	UUIDString = strings.Replace(UUIDString, "-", "", -1)
+	UUIDString = UUIDString[:24]
+	return UUIDString
 }

@@ -9,24 +9,24 @@ import (
 // Some of the statuses we recognise.
 // TODO Sybren: list all used statuses here as constants, instead of using string literals.
 const (
-	statusQueued           = "queued"
-	statusClaimedByManager = "claimed-by-manager"
-	statusActive           = "active"
-	statusCanceled         = "canceled"
-	statusFailed           = "failed"
-	statusCompleted        = "completed"
-	statusCancelRequested  = "cancel-requested"
+	StatusQueued           = "queued"
+	StatusClaimedByManager = "claimed-by-manager"
+	StatusActive           = "active"
+	StatusCanceled         = "canceled"
+	StatusFailed           = "failed"
+	StatusCompleted        = "completed"
+	StatusCancelRequested  = "cancel-requested"
 )
 
 // Possible worker statuses.
 const (
-	workerStatusStarting = "starting" // signed on but not done anything yet
-	workerStatusOffline  = "offline"
-	workerStatusShutdown = "shutdown" // will go offline soon
-	workerStatusAwake    = "awake"
-	workerStatusTesting  = "testing"
-	workerStatusTimeout  = "timeout"
-	workerStatusAsleep   = "asleep" // listens to a wakeup call, but performs no tasks.
+	WorkerStatusStarting = "starting" // signed on but not done anything yet
+	WorkerStatusOffline  = "offline"
+	WorkerStatusShutdown = "shutdown" // will go offline soon
+	WorkerStatusAwake    = "awake"
+	WorkerStatusTesting  = "testing"
+	WorkerStatusTimeout  = "timeout"
+	WorkerStatusAsleep   = "asleep" // listens to a wakeup call, but performs no tasks.
 )
 
 // Command is an executable part of a Task

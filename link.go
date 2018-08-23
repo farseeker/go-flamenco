@@ -89,16 +89,7 @@ func linkChoose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//knownAsByte := bkt.Get([]byte("known-as"))
-	//knownAsUUID := uuid.New()
-	//knownAsUUID.UnmarshalText(string(knownAsByte))
-	//knownAsString := knownAsUUID.String()
-
-	managerUUID := uuid.New()
-	managerUUIDString := managerUUID.String()
-
-	fmt.Println("Given manager id:", managerUUIDString)
-
+	managerUUIDString := newUUIDForBson()
 	bkt.Put([]byte("linked-manager-id"), []byte(managerUUIDString))
 
 	mgrbkt, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("manager-%s", managerUUIDString)))
@@ -138,5 +129,6 @@ func linkReset(w http.ResponseWriter, r *http.Request) {
 		Token:      "abcd",
 	}
 	resetJSON, _ := json.Marshal(resetResponse)
+	w.Header().Set("Content-Type", jsonType)
 	w.Write(resetJSON)
 }

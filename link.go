@@ -9,13 +9,12 @@ import (
 	"net/http"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"github.com/farseeker/go-flamenco/flamenco-imports/websetup"
-	"github.com/google/uuid"
 )
 
-var linkerKey []byte
-
 func linkExchange(w http.ResponseWriter, r *http.Request) {
+
 	var payload websetup.KeyExchangeRequest
 	decoder := json.NewDecoder(r.Body)
 	err := decoder.Decode(&payload)
@@ -23,46 +22,30 @@ func linkExchange(w http.ResponseWriter, r *http.Request) {
 		httpError(w, fmt.Errorf("Unable to decode payload: %s", err.Error()))
 		return
 	}
-	fmt.Println("Key Exchange started: ", payload.KeyHex)
 
-	key, err := hex.DecodeString(payload.KeyHex)
-	if err != nil {
-		httpError(w, fmt.Errorf("Unable to decode mac %s: %s", payload.KeyHex, err.Error()))
-		return
-	}
-	linkerKey = key
-
-	tx, err := db.Begin(true)
-	if err != nil {
-		httpError(w, fmt.Errorf("Unable to open database transaction: %s", err.Error()))
-		return
-	}
-	defer tx.Rollback()
-
-	knownAS := uuid.New()
-	knownAsString := knownAS.String()
-
-	bkt, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("linker-%s", knownAsString)))
-	if err != nil {
-		httpError(w, fmt.Errorf("Unable to create linker bucket: %s", err.Error()))
-		return
+	thisLinkExchange := linkExchangeConversation{
+		ManagerPayload: payload,
+		ManagerKey:     payload.KeyHex,
 	}
 
-	time, _ := time.Now().GobEncode()
-	bkt.Put([]byte("linker-key"), linkerKey)
-	bkt.Put([]byte("created-at"), time)
-	bkt.Put([]byte("created-by"), []byte(r.RemoteAddr))
+	thisConversation := managerDoc{
+		ManagerID:    newUUIDForBson(),
+		CreatedAt:    time.Now(),
+		CreatedBy:    r.RemoteAddr,
+		LinkExchange: thisLinkExchange,
+	}
 
-	if err := tx.Commit(); err != nil {
-		httpError(w, fmt.Errorf("Unable to commit linker bucket: %s", err.Error()))
+	conversationDoc := fsGetLink(thisConversation.ManagerID)
+	wr, err := conversationDoc.Create(ctx, thisConversation)
+	if err != nil {
+		httpError(w, fmt.Errorf("Unable to save link conversation %s", err.Error()))
+		fmt.Println(wr)
 		return
 	}
 
 	response := websetup.KeyExchangeResponse{
-		Identifier: knownAsString,
+		Identifier: thisConversation.ManagerID,
 	}
-
-	fmt.Println("Known as:", knownAsString)
 
 	responseJSON, _ := json.Marshal(&response)
 	fmt.Fprintf(w, string(responseJSON))
@@ -73,46 +56,47 @@ func linkChoose(w http.ResponseWriter, r *http.Request) {
 	identifier := r.FormValue("identifier")
 	returnURL := r.FormValue("return")
 
-	fmt.Println("Choose identifier:", identifier)
-	fmt.Println("Choose hmac:", mac)
-
-	tx, err := db.Begin(true)
+	conversationDoc := fsGetLink(identifier)
+	conversationSnapshot, err := conversationDoc.Get(ctx)
 	if err != nil {
-		httpError(w, fmt.Errorf("Unable to open database transaction: %s", err.Error()))
-		return
-	}
-	defer tx.Rollback()
-
-	bkt := tx.Bucket([]byte(fmt.Sprintf("linker-%s", identifier)))
-	if bkt == nil {
-		httpError(w, fmt.Errorf("Linker bucket %s does not exist", identifier))
+		httpError(w, fmt.Errorf("Unable to fetch linker conversation for %s: %s", identifier, err.Error()))
 		return
 	}
 
-	managerUUIDString := newUUIDForBson()
-	bkt.Put([]byte("linked-manager-id"), []byte(managerUUIDString))
+	thisConversation := managerDoc{}
+	conversationSnapshot.DataTo(&thisConversation)
 
-	mgrbkt, err := tx.CreateBucketIfNotExists([]byte(fmt.Sprintf("manager-%s", managerUUIDString)))
+	thisChooseConversation := chooseConversation{
+		QueryHMAC:                 mac,
+		QueryIdentifier:           identifier,
+		QueryReturn:               returnURL,
+		ResponseManagerUUIDString: newUUIDForBson(),
+	}
+
+	linkerKey, err := hex.DecodeString(thisConversation.LinkExchange.ManagerKey)
 	if err != nil {
-		httpError(w, fmt.Errorf("Unable to create manager bucket: %s", err.Error()))
-		return
-	}
-	mgrbkt.Put([]byte("from-linker-id"), []byte("identifier"))
-
-	if err := tx.Commit(); err != nil {
-		httpError(w, fmt.Errorf("Unable to commit linker/manager bucket: %s", err.Error()))
+		httpError(w, fmt.Errorf("Unable to decode mac %s: %s", thisConversation.LinkExchange.ManagerKey, err.Error()))
 		return
 	}
 
-	msg := []byte(identifier + "-" + managerUUIDString)
+	msg := []byte(identifier + "-" + thisChooseConversation.ResponseManagerUUIDString)
 	hmac := hmac.New(sha256.New, linkerKey)
 	hmac.Write(msg)
 
-	computedMac := hex.EncodeToString(hmac.Sum(nil))
+	thisChooseConversation.ResponseHMAC = hex.EncodeToString(hmac.Sum(nil))
+	thisChooseConversation.ResponseURL = fmt.Sprintf("%s?hmac=%s&oid=%s", returnURL, thisChooseConversation.ResponseHMAC, thisChooseConversation.ResponseManagerUUIDString)
 
-	redirectToString := fmt.Sprintf("%s?hmac=%s&oid=%s", returnURL, computedMac, managerUUIDString)
+	conversationDoc.Update(ctx, []firestore.Update{firestore.Update{
+		Path:  "_ChooseConversation",
+		Value: thisChooseConversation,
+	}})
 
-	http.Redirect(w, r, redirectToString, http.StatusTemporaryRedirect)
+	//Make a new doc with the managers final ID and copy the conversation doc into it
+	thisConversation.ChooseConversation = thisChooseConversation
+	managerDoc := fsGetManager(thisChooseConversation.ResponseManagerUUIDString)
+	managerDoc.Set(ctx, thisConversation)
+
+	http.Redirect(w, r, thisChooseConversation.ResponseURL, http.StatusTemporaryRedirect)
 }
 
 func linkReset(w http.ResponseWriter, r *http.Request) {

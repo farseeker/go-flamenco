@@ -6,3 +6,6 @@ debug
 log.txt
 
 .vscode
+
+firebase-auth.json
+dev-go-flamenco.toml

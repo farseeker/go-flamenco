@@ -5,60 +5,34 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 	"time"
 
-	"github.com/boltdb/bolt"
+	"cloud.google.com/go/firestore"
 	"github.com/farseeker/go-flamenco/flamenco-imports/flamenco"
 	"gopkg.in/mgo.v2/bson"
 
 	"github.com/gorilla/mux"
 )
 
-func initManagerRequest(r *http.Request, rw bool) (string, *bolt.Tx, *bolt.Bucket, error) {
+func initManagerRequest(r *http.Request) (string, *firestore.DocumentRef, error) {
 	vars := mux.Vars(r)
 	identity := vars["identity"]
 	if identity == "" {
-		return "", nil, nil, fmt.Errorf("Unable to determine identity from request %s", r.RequestURI)
-
+		return "", nil, fmt.Errorf("Unable to determine identity from request %s", r.RequestURI)
 	}
 
-	tx, err := db.Begin(rw)
-	if err != nil {
-		tx.Rollback()
-		return "", nil, nil, err
-	}
+	managerDoc := fsGetManager(identity)
+	managerDoc.Update(ctx, []firestore.Update{firestore.Update{
+		Path:  "LastSeen",
+		Value: time.Now(),
+	}})
 
-	bkt := tx.Bucket([]byte(fmt.Sprintf("manager-%s", identity)))
-	if err != nil {
-		tx.Rollback()
-		return "", nil, nil, err
-	}
-
-	if bkt == nil {
-		tx.Rollback()
-		return "", nil, nil, fmt.Errorf("Unable to open bucket for identity %s", identity)
-	}
-
-	if rw {
-		time, _ := time.Now().GobEncode()
-		bkt.Put([]byte("last-seen"), time)
-	}
-
-	return identity, tx, bkt, nil
+	return identity, managerDoc, nil
 }
 
 func taskUpdateBatch(w http.ResponseWriter, r *http.Request) {
-	_, tx, _, err := initManagerRequest(r, true)
-	defer tx.Rollback()
-	if err != nil {
-		httpError(w, fmt.Errorf("Unable to init request: %s", err.Error()))
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		httpError(w, fmt.Errorf("Unable to commit manager bucket: %s", err.Error()))
-		return
-	}
+	_, managerDoc, err := initManagerRequest(r)
 
 	updates := []flamenco.TaskUpdate{}
 	decoder := json.NewDecoder(r.Body)
@@ -68,16 +42,61 @@ func taskUpdateBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Eventually we'll do something here, but for now let's just get it working
-	response := flamenco.TaskUpdateResponse{}
+	var updatesManaged []bson.ObjectId
+	updateCollection := managerDoc.Collection("UpdateBatches")
+	timeNow := time.Now()
+	timeNowString := strconv.FormatInt(timeNow.Unix(), 10)
+	if len(updates) > 0 {
+		updateDoc := updateDoc{
+			ReceivedAt: timeNow,
+			Count:      len(updates),
+			//Received:   updates,
+		}
+		updateBatchDocRef := updateCollection.Doc(timeNowString)
+		updateBatchDocRef.Create(ctx, updateDoc)
+		if err != nil {
+			httpError(w, fmt.Errorf("Unable to create update doc: %s", err.Error()))
+			return
+		}
+
+		for _, update := range updates {
+			updateID := update.ID.Hex()
+			updateDocRef := updateBatchDocRef.Collection("Updates").Doc(updateID)
+
+			_, err := updateDocRef.Create(ctx, update)
+			if err != nil {
+				httpError(w, fmt.Errorf("Unable to log update: %s", err.Error()))
+				continue
+			}
+
+			_, err = updateDocRef.Update(ctx, []firestore.Update{firestore.Update{
+				Path:  "ID",
+				Value: update.ID.Hex(),
+			}, firestore.Update{
+				Path:  "TaskID",
+				Value: update.TaskID.Hex(),
+			}})
+			if err != nil {
+				httpError(w, fmt.Errorf("Unable to log update updates: %s", err.Error()))
+				continue
+			}
+
+			updatesManaged = append(updatesManaged, update.ID)
+		}
+	}
+
+	response := flamenco.TaskUpdateResponse{
+		ModifiedCount:    len(updatesManaged),
+		HandledUpdateIds: updatesManaged,
+	}
+
 	responseJSON, _ := json.Marshal(response)
 	w.Header().Set("Content-Type", jsonType)
 	w.Write(responseJSON)
 }
 
 func startup(w http.ResponseWriter, r *http.Request) {
-	_, tx, bkt, err := initManagerRequest(r, true)
-	defer tx.Rollback()
+	_, managerDoc, err := initManagerRequest(r)
 	if err != nil {
 		httpError(w, fmt.Errorf("Unable to init request: %s", err.Error()))
 		return
@@ -97,26 +116,17 @@ func startup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bkt.Put([]byte("startup-notification"), bodyBytes)
-
-	//fmt.Println(startupNotification.ManagerURL)
-	//fmt.Println(startupNotification.NumberOfWorkers)
-	//fmt.Println(startupNotification.PathReplacementByVarname)
-	//fmt.Println(startupNotification.VariablesByVarname)
-
-	if err := tx.Commit(); err != nil {
-		httpError(w, fmt.Errorf("Unable to commit manager bucket: %s", err.Error()))
-		return
-	}
+	startupCollection := managerDoc.Collection("StartupNotices")
+	timeNow := strconv.FormatInt(time.Now().Unix(), 10)
+	startupCollection.Doc(timeNow).Create(ctx, startupNotification)
 }
 
 func depsgraph(w http.ResponseWriter, r *http.Request) {
-	identity, tx, _, err := initManagerRequest(r, true)
+	_, _, err := initManagerRequest(r)
 	if err != nil {
 		httpError(w, fmt.Errorf("Unable to init request: %s", err.Error()))
 		return
 	}
-	defer tx.Rollback()
 
 	lastUpdated := r.Header.Get("X-Flamenco-If-Updated-Since")
 	fmt.Println("X-Flamenco-If-Updated-Since: ", lastUpdated)
@@ -128,27 +138,29 @@ func depsgraph(w http.ResponseWriter, r *http.Request) {
 		Depsgraph: []flamenco.Task{},
 	}
 
-	now := time.Now()
-	scheduledTasks.Depsgraph = append(scheduledTasks.Depsgraph, flamenco.Task{
-		Name:        "Test Task",
-		Manager:     bson.ObjectIdHex(identity),
-		Job:         bson.ObjectIdHex(newUUIDForBson()),
-		Project:     bson.ObjectIdHex(newUUIDForBson()),
-		ID:          bson.ObjectIdHex(newUUIDForBson()),
-		User:        bson.ObjectIdHex(newUUIDForBson()),
-		TaskType:    "echo",
-		Activity:    "queued",
-		Etag:        "abcd",
-		Priority:    10,
-		JobPriority: 10,
-		JobType:     "test",
-		LastUpdated: &now,
-		Status:      flamenco.StatusQueued,
-		Commands: []flamenco.Command{
-			flamenco.Command{Name: "echo", Settings: bson.M{"message": "Running Blender from {blender}"}},
-			flamenco.Command{Name: "sleep", Settings: bson.M{"time_in_seconds": 3}},
-		},
-	})
+	/*
+		now := time.Now()
+		scheduledTasks.Depsgraph = append(scheduledTasks.Depsgraph, flamenco.Task{
+			Name:        "Test Task",
+			Manager:     bson.ObjectIdHex(identity),
+			Job:         bson.ObjectIdHex(newUUIDForBson()),
+			Project:     bson.ObjectIdHex(newUUIDForBson()),
+			ID:          bson.ObjectIdHex(newUUIDForBson()),
+			User:        bson.ObjectIdHex(newUUIDForBson()),
+			TaskType:    "echo",
+			Activity:    "queued",
+			Etag:        "abcd",
+			Priority:    10,
+			JobPriority: 10,
+			JobType:     "test",
+			LastUpdated: &now,
+			Status:      flamenco.StatusQueued,
+			Commands: []flamenco.Command{
+				flamenco.Command{Name: "echo", Settings: bson.M{"message": "Running Blender from {blender}"}},
+				flamenco.Command{Name: "sleep", Settings: bson.M{"time_in_seconds": 3}},
+			},
+		})
+	*/
 
 	if len(scheduledTasks.Depsgraph) == 0 {
 		w.WriteHeader(http.StatusNoContent)

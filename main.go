@@ -1,30 +1,42 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/boltdb/bolt"
+	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
-var db *bolt.DB
+var configPath = flag.String("config", "go-flamenco.toml", "Configuration file to read for go-flamenco settings")
 
 func main() {
-	var err error
-	db, err = bolt.Open("go-flamenco.db", 0600, &bolt.Options{
-		Timeout: 1 * time.Second,
-	})
+	flag.Parse()
+	config = appConfig{}
+	configFile, err := ioutil.ReadFile(*configPath)
 	if err != nil {
-		fmt.Println("Unable to open bolt db")
-		return
+		fmt.Println("Unable to open configuration file", *configPath)
+		os.Exit(1)
 	}
-	defer db.Close()
+
+	_, err = toml.Decode(string(configFile), &config)
+	if err != nil {
+		fmt.Println("Unable to parse configuration file", *configPath)
+		os.Exit(1)
+	}
+
+	err = fsConnect(config.FirestoreProjectID, config.FirestoreAuthFile)
+	if err != nil {
+		fmt.Printf("Unable to connect to Firestore project %s with creds from %s", config.FirestoreProjectID, config.FirestoreAuthFile)
+		os.Exit(1)
+	}
 
 	r := mux.NewRouter()
 
@@ -35,13 +47,11 @@ func main() {
 	r.HandleFunc("/api/flamenco/managers/{identity}/startup", startup)
 	r.HandleFunc("/api/flamenco/managers/{identity}/depsgraph", depsgraph)
 	r.HandleFunc("/api/flamenco/tasks/{taskid}", taskByID)
-	//
 
 	r.PathPrefix("/").HandlerFunc(logDefault)
 	srv := &http.Server{
-		Handler: r,
-		Addr:    ":8123",
-		// Good practice: enforce timeouts for servers you create!
+		Handler:      r,
+		Addr:         ":8123",
 		WriteTimeout: 15 * time.Second,
 		ReadTimeout:  15 * time.Second,
 	}
@@ -60,7 +70,7 @@ func logDefault(w http.ResponseWriter, r *http.Request) {
 
 func httpError(w http.ResponseWriter, err error) {
 	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, err.Error())
+	fmt.Fprintln(w, err.Error())
 	fmt.Println(err)
 }
 

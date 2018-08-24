@@ -73,8 +73,8 @@ type ScheduledTasks struct {
 
 // TaskUpdate is both sent from Worker to Manager, as well as from Manager to Server.
 type TaskUpdate struct {
-	ID                        bson.ObjectId `bson:"_id" json:"_id"`
-	TaskID                    bson.ObjectId `bson:"task_id" json:"task_id,omitempty"`
+	ID                        bson.ObjectId `bson:"_id" json:"_id" firestore:"-"`
+	TaskID                    bson.ObjectId `bson:"task_id" json:"task_id,omitempty" firestore:"-"`
 	TaskStatus                string        `bson:"task_status,omitempty" json:"task_status,omitempty"`
 	ReceivedOnManager         time.Time     `bson:"received_on_manager" json:"received_on_manager"`
 	Activity                  string        `bson:"activity,omitempty" json:"activity,omitempty"`
